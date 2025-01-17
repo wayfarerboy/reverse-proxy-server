@@ -5,12 +5,12 @@
   "main": "server.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "node server.js"
+    "start": "node server.mjs"
   },
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "chalk": "^4.1.2",
+    "chalk": "^5.4.1",
     "http-proxy": "^1.18.1",
     "reverse-proxy-mapping": "^1.0.8"
   },
@@ -20,7 +20,10 @@
     "trailingComma": "all"
   },
   "devDependencies": {
-    "eslint": "^8.12.0",
-    "prettier": "^2.6.1"
+    "eslint": "^9.18.0",
+    "prettier": "^3.4.2"
+  },
+  "engines": {
+    "node": "16.x"
   }
 }
