@@ -19,7 +19,7 @@ const getCertKey = (domain) => ({
 
 const callbacks = {};
 Object.keys(config.domains)
-  .filter((val) => typeof config.domains[val] === 'number')
+  .filter((val) => typeof config.domains[val] === 'number' && !val.includes('/'))
   .forEach((domain) => {
     console.log(
       chalk.cyan(domain),
@@ -36,6 +36,27 @@ const options = {
   },
 };
 
+const CLI_HOST = 'cli.generamics.co.uk';
+
+// HTTP basic auth gate for the cli.generamics.co.uk domain (terminal + panel).
+const authorized = (req) => {
+  if (getHost(req) !== CLI_HOST) return true; // only gate the cli domain
+  const { user, pass } = config.cliAuth || {};
+  if (!user) return true; // no credential configured -> allow
+  const auth = req.headers['authorization'] || '';
+  const [scheme, b64] = auth.split(' ');
+  if (scheme !== 'Basic' || !b64) return false;
+  let decoded;
+  try {
+    decoded = Buffer.from(b64, 'base64').toString('utf8');
+  } catch {
+    return false;
+  }
+  const i = decoded.indexOf(':');
+  if (i === -1) return false;
+  return decoded.slice(0, i) === user && decoded.slice(i + 1) === pass;
+};
+
 const getHost = (req) => req.headers.host.split(':')[0];
 const getRoute = (req) => req.url.split('?')[0];
 const getHostname = (req) => {
@@ -43,7 +64,16 @@ const getHostname = (req) => {
   let route = getRoute(req);
   route = route.endsWith('/') ? route.substr(0, route.length - 1) : route;
   const mapFrom = host + route;
-  return config.domains[mapFrom] ? mapFrom : host;
+  // longest-prefix match: a key maps if it equals mapFrom or is a path-prefix of
+  // it (so a '/term' key also covers '/term', '/term/', '/term/ws', '/term/token').
+  let best = null;
+  for (const key of Object.keys(config.domains)) {
+    if (typeof config.domains[key] !== 'number') continue;
+    if (mapFrom === key || mapFrom.startsWith(key + '/')) {
+      if (!best || key.length > best.length) best = key;
+    }
+  }
+  return best || host;
 };
 
 const getPort = (req) => {
@@ -53,6 +83,11 @@ const getPort = (req) => {
 };
 
 const server = https.createServer(options, (req, res) => {
+  if (!authorized(req)) {
+    res.writeHead(401, { 'WWW-Authenticate': 'Basic realm="webterm"' });
+    res.end('Unauthorized');
+    return;
+  }
   const [port, mapFrom, otherHost = 'localhost'] = getPort(req);
   if (typeof port === 'number') {
     console.log('https', getHost(req), getRoute(req));
@@ -64,6 +99,11 @@ const server = https.createServer(options, (req, res) => {
 });
 
 server.on('upgrade', (req, res) => {
+  if (!authorized(req)) {
+    res.write('HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm="webterm"\r\n\r\n');
+    res.destroy();
+    return;
+  }
   const [port, mapFrom, otherHost = 'localhost'] = getPort(req);
   if (typeof port === 'number') {
     console.log('wss', getHost(req), getRoute(req));
