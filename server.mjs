@@ -8,6 +8,21 @@ import config from './config.mjs';
 
 const proxy = httpProxy.createProxyServer({ ws: true });
 
+// Without a user 'error' listener, http-proxy's default onError THROWS when a
+// backend refuses a connection (ECONNREFUSED), crashing the whole proxy process
+// (pm2 saw 660 restarts from this). Attach our own handler to keep serving and
+// return 502 to the client instead of dying.
+proxy.on('error', (err, req, res) => {
+  const host = req.headers && req.headers.host;
+  console.error(chalk.red(`[proxy] ${host || '?'} ${req.url} -> ${err.message}`));
+  if (res && typeof res.writeHead === 'function' && !res.headersSent) {
+    res.writeHead(502, { 'Content-Type': 'text/plain' });
+    res.end('Bad Gateway');
+  } else if (res && res.destroy) {
+    res.destroy(); // websocket upgrade path
+  }
+});
+
 const getCertKey = (domain) => ({
   key: readFileSync(
     `${config.etcPath}/certbot/certs/live/${domain}/privkey.pem`,
