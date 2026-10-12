@@ -8,6 +8,25 @@ import config from './config.mjs';
 
 const proxy = httpProxy.createProxyServer({ ws: true });
 
+// Cross-origin access for public HLS origins. Listeners' browsers on the
+// radio.* domains fetch the playlist and segments cross-origin, and hls.js
+// (plus the app's own playlist fetch for pinned sync) fail without CORS. Only
+// the stream host is opened up, and it is public unauthenticated media, so a
+// wildcard origin is safe and covers dev/staging/production. Every other
+// proxied host is untouched.
+const CORS_HOSTS = new Set(['stream.bikeworcester.org.uk']);
+const corsHeadersFor = (req) => {
+  if (!CORS_HOSTS.has(getHost(req))) return null;
+  return {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
+    'Access-Control-Allow-Headers': 'Range, Content-Type',
+    'Access-Control-Expose-Headers':
+      'Content-Length, Content-Range, Accept-Ranges, Content-Type, Cache-Control',
+    'Access-Control-Max-Age': '86400',
+  };
+};
+
 // Without a user 'error' listener, http-proxy's default onError THROWS when a
 // backend refuses a connection (ECONNREFUSED), crashing the whole proxy process
 // (pm2 saw 660 restarts from this). Attach our own handler to keep serving and
@@ -21,6 +40,12 @@ proxy.on('error', (err, req, res) => {
   } else if (res && res.destroy) {
     res.destroy(); // websocket upgrade path
   }
+});
+
+// Add the CORS headers to actual backend responses (playlist and segments).
+proxy.on('proxyRes', (proxyRes, req) => {
+  const headers = corsHeadersFor(req);
+  if (headers) Object.assign(proxyRes.headers, headers);
 });
 
 const getCertKey = (domain) => ({
@@ -101,6 +126,13 @@ const server = https.createServer(options, (req, res) => {
   if (!authorized(req)) {
     res.writeHead(401, { 'WWW-Authenticate': 'Basic realm="webterm"' });
     res.end('Unauthorized');
+    return;
+  }
+  // Answer CORS preflight in the proxy: the backend file server 405s OPTIONS.
+  const corsHeaders = corsHeadersFor(req);
+  if (corsHeaders && req.method === 'OPTIONS') {
+    res.writeHead(204, corsHeaders);
+    res.end();
     return;
   }
   const [port, mapFrom, otherHost = 'localhost'] = getPort(req);
